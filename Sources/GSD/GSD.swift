@@ -1128,6 +1128,61 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
 class MarkdownNSTextView: NSTextView {
     var onCheckboxToggle: ((NSRange) -> Void)?
 
+    // MARK: Confetti animation
+
+    func showConfetti() {
+        wantsLayer = true
+        guard let rootLayer = self.layer else { return }
+
+        let emitter = CAEmitterLayer()
+        emitter.emitterPosition = CGPoint(x: bounds.midX, y: 0)
+        emitter.emitterSize = CGSize(width: bounds.width, height: 1)
+        emitter.emitterShape = .line
+        emitter.renderMode = .additive
+
+        let colors: [NSColor] = [
+            .systemGreen, .systemYellow, .systemOrange,
+            .systemPink, .systemBlue, .systemPurple,
+        ]
+
+        emitter.emitterCells = colors.map { color in
+            let cell = CAEmitterCell()
+            cell.birthRate = 25
+            cell.lifetime = 1.2
+            cell.velocity = 180
+            cell.velocityRange = 80
+            cell.emissionLongitude = .pi
+            cell.emissionRange = .pi / 4
+            cell.spin = 4
+            cell.spinRange = 4
+            cell.scale = 0.05
+            cell.scaleRange = 0.03
+            cell.alphaSpeed = -0.8
+
+            // Tiny square confetti piece
+            let sz: CGFloat = 12
+            let img = NSImage(size: NSSize(width: sz, height: sz), flipped: false) { rect in
+                color.setFill()
+                NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2).fill()
+                return true
+            }
+            cell.contents = img.cgImage(
+                forProposedRect: nil, context: nil, hints: nil)
+
+            return cell
+        }
+
+        rootLayer.addSublayer(emitter)
+
+        // Stop emitting after a short burst, then clean up
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            emitter.birthRate = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            emitter.removeFromSuperlayer()
+        }
+    }
+
     // MARK: Checkbox click detection
 
     override func mouseDown(with event: NSEvent) {
@@ -1479,8 +1534,10 @@ struct MarkdownEditorView: NSViewRepresentable {
             let string = textView.string as NSString
             let line = string.substring(with: lineRange)
 
+            let wasUnchecked = line.contains("- [ ]")
+
             var newLine: String
-            if line.contains("- [ ]") {
+            if wasUnchecked {
                 newLine = line.replacingOccurrences(of: "- [ ]", with: "- [x]")
             } else {
                 newLine = line.replacingOccurrences(of: "- [x]", with: "- [ ]")
@@ -1503,6 +1560,11 @@ struct MarkdownEditorView: NSViewRepresentable {
             }
             parent.text = textView.string
             isSyncing = false
+
+            // Confetti when checking off a task
+            if wasUnchecked {
+                textView.showConfetti()
+            }
         }
     }
 }
