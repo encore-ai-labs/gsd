@@ -624,6 +624,7 @@ struct NoteView: View {
     @StateObject private var store = NoteStore()
     @State private var showingCalendar = false
     @State private var editingRaw = false
+    @AppStorage("confettiEnabled") private var confettiEnabled = true
     @State private var showingNewNotebook = false
     @State private var newNotebookName = ""
     @State private var searchMode = false
@@ -687,6 +688,10 @@ struct NoteView: View {
 
                     Toggle(isOn: $editingRaw) {
                         Label("Edit Markdown", systemImage: "pencil.line")
+                    }
+
+                    Toggle(isOn: $confettiEnabled) {
+                        Label("Confetti", systemImage: "party.popper")
                     }
 
                     Divider()
@@ -773,7 +778,7 @@ struct NoteView: View {
                             store.scheduleSave()
                         }
                 } else {
-                    RichEditorView(store: store)
+                    RichEditorView(store: store, confettiEnabled: confettiEnabled)
                 }
 
                 // Footer
@@ -1158,8 +1163,8 @@ class MarkdownNSTextView: NSTextView {
             cell.emissionRange = .pi
             cell.spin = 4
             cell.spinRange = 4
-            cell.scale = 0.05
-            cell.scaleRange = 0.03
+            cell.scale = 0.09
+            cell.scaleRange = 0.04
             cell.alphaSpeed = -0.8
 
             // Tiny square confetti piece
@@ -1433,6 +1438,7 @@ private func sortCheckboxBlocks(in text: String) -> String {
 /// SwiftUI wrapper for the full markdown editor.
 struct MarkdownEditorView: NSViewRepresentable {
     @Binding var text: String
+    var confettiEnabled: Bool = true
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -1547,26 +1553,41 @@ struct MarkdownEditorView: NSViewRepresentable {
                     .replacingOccurrences(of: "- [X]", with: "- [ ]")
             }
 
-            // Build toggled text, then sort checkbox blocks
-            var text = textView.string
-            if let range = Range(lineRange, in: text) {
-                text.replaceSubrange(range, with: newLine)
+            // Toggle the checkbox immediately (no sort yet)
+            var toggled = textView.string
+            if let range = Range(lineRange, in: toggled) {
+                toggled.replaceSubrange(range, with: newLine)
             }
-            text = sortCheckboxBlocks(in: text)
 
-            // Apply as single change
             let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
             isSyncing = true
-            if textView.shouldChangeText(in: fullRange, replacementString: text) {
-                textView.replaceCharacters(in: fullRange, with: text)
+            if textView.shouldChangeText(in: fullRange, replacementString: toggled) {
+                textView.replaceCharacters(in: fullRange, with: toggled)
                 textView.didChangeText()
             }
             parent.text = textView.string
             isSyncing = false
 
-            // Confetti when checking off a task
-            if wasUnchecked {
+            // Confetti first, then sort after a short delay
+            if wasUnchecked && parent.confettiEnabled {
                 textView.showConfetti(at: clickPoint)
+            }
+
+            // Sort after confetti has a moment to pop
+            let delay: Double = wasUnchecked && parent.confettiEnabled ? 0.35 : 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self else { return }
+                let sorted = sortCheckboxBlocks(in: textView.string)
+                if sorted != textView.string {
+                    let r = NSRange(location: 0, length: (textView.string as NSString).length)
+                    self.isSyncing = true
+                    if textView.shouldChangeText(in: r, replacementString: sorted) {
+                        textView.replaceCharacters(in: r, with: sorted)
+                        textView.didChangeText()
+                    }
+                    self.parent.text = textView.string
+                    self.isSyncing = false
+                }
             }
         }
     }
@@ -1576,6 +1597,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
 struct RichEditorView: View {
     @ObservedObject var store: NoteStore
+    var confettiEnabled: Bool = true
     @State private var newTaskText: String = ""
 
     var body: some View {
@@ -1587,7 +1609,8 @@ struct RichEditorView: View {
                         store.text = newValue
                         store.scheduleSave()
                     }
-                ))
+                ),
+                confettiEnabled: confettiEnabled)
 
             Divider()
 
