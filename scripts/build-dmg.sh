@@ -26,8 +26,9 @@ cp "$(pwd)/Resources/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
 # Copy app icon
 cp "$(pwd)/Resources/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 
-echo "==> Ad-hoc code signing..."
-codesign --force --deep -s - "${APP_BUNDLE}"
+echo "==> Code signing..."
+SIGNING_IDENTITY="${SIGNING_IDENTITY:-"-"}"
+codesign --force --deep --options runtime -s "${SIGNING_IDENTITY}" "${APP_BUNDLE}"
 
 echo "==> Creating DMG..."
 rm -rf "${DMG_DIR}"
@@ -50,6 +51,5 @@ echo "==> Done!"
 echo "    DMG: ${DMG_PATH}"
 echo "    Size: $(du -h "${DMG_PATH}" | cut -f1)"
 echo ""
-echo "Note: This is ad-hoc signed. Recipients will need to"
-echo "right-click > Open on first launch to bypass Gatekeeper."
-echo 'For proper distribution, sign with a Developer ID (Apple Developer Program).'
+echo "Set SIGNING_IDENTITY env var to sign with a Developer ID."
+echo "Without it, the build is ad-hoc signed (right-click > Open to launch)."
