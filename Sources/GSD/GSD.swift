@@ -1135,21 +1135,15 @@ class MarkdownNSTextView: NSTextView {
 
     // MARK: Confetti animation
 
-    func showConfetti(at viewPoint: NSPoint) {
-        wantsLayer = true
-        guard let layer = self.layer else { return }
-
-        // NSTextView is flipped (origin top-left), CALayer is not (origin bottom-left).
-        // viewPoint is in the text view's flipped coordinate space.
-        // For CALayer, Y=0 is at the bottom of the layer.
-        let emitterX = viewPoint.x + 10
-        let emitterY = layer.bounds.height - viewPoint.y
+    func showConfetti() {
+        guard let scrollView = enclosingScrollView else { return }
+        scrollView.wantsLayer = true
+        guard let layer = scrollView.layer else { return }
 
         let emitter = CAEmitterLayer()
-        emitter.frame = layer.bounds
-        emitter.emitterPosition = CGPoint(x: emitterX, y: emitterY)
-        emitter.emitterSize = .zero
-        emitter.emitterShape = .point
+        emitter.emitterPosition = CGPoint(x: layer.bounds.midX, y: layer.bounds.height)
+        emitter.emitterSize = CGSize(width: layer.bounds.width, height: 1)
+        emitter.emitterShape = .line
 
         let colors: [CGColor] = [
             NSColor.systemGreen.cgColor,
@@ -1176,26 +1170,25 @@ class MarkdownNSTextView: NSTextView {
             let cell = CAEmitterCell()
             cell.contents = img
             cell.color = color
-            cell.birthRate = 30
-            cell.lifetime = 2.0
+            cell.birthRate = 20
+            cell.lifetime = 3.0
 
-            // Pop UP, then gravity pulls down
-            // In CALayer coords: negative Y = upward
-            cell.velocity = 200
-            cell.velocityRange = 80
-            cell.emissionLongitude = -.pi / 2   // upward in layer coords
-            cell.emissionRange = .pi / 4        // spread
-            cell.yAcceleration = 300            // gravity (positive = downward in layer)
+            // Rain downward
+            cell.velocity = 150
+            cell.velocityRange = 50
+            cell.emissionLongitude = .pi / 2    // downward in layer coords
+            cell.emissionRange = .pi / 6
+            cell.yAcceleration = -40            // slight drift
 
-            cell.spin = 4
-            cell.spinRange = 8
-            cell.scale = 0.12
-            cell.scaleRange = 0.06
-            cell.alphaSpeed = -0.5
+            cell.spin = 3
+            cell.spinRange = 6
+            cell.scale = 0.1
+            cell.scaleRange = 0.05
+            cell.alphaSpeed = -0.4
             return cell
         }
 
-        layer.addSublayer(emitter)
+        scrollView.layer?.addSublayer(emitter)
 
         // Short burst
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
@@ -1586,7 +1579,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             // Confetti first, then sort after a short delay
             if wasUnchecked && parent.confettiEnabled {
-                textView.showConfetti(at: clickPoint)
+                textView.showConfetti()
             }
 
             // Sort after confetti has a moment to pop
