@@ -1135,67 +1135,73 @@ class MarkdownNSTextView: NSTextView {
 
     // MARK: Confetti animation
 
-    func showConfetti(at point: NSPoint) {
-        // Add confetti to the scroll view's clip view so it stays in the visible area
-        guard let scrollView = enclosingScrollView,
-              let clipView = scrollView.contentView as? NSClipView else { return }
+    func showConfetti(at viewPoint: NSPoint) {
+        wantsLayer = true
+        guard let layer = self.layer else { return }
 
-        clipView.wantsLayer = true
-        guard let clipLayer = clipView.layer else { return }
-
-        // Convert point from text view coords to clip view coords
-        let clipPoint = convert(point, to: clipView)
-        let layerY = clipView.bounds.height - clipPoint.y
+        // NSTextView is flipped (origin top-left), CALayer is not (origin bottom-left).
+        // viewPoint is in the text view's flipped coordinate space.
+        // For CALayer, Y=0 is at the bottom of the layer.
+        let emitterX = viewPoint.x + 10
+        let emitterY = layer.bounds.height - viewPoint.y
 
         let emitter = CAEmitterLayer()
-        emitter.emitterPosition = CGPoint(x: clipPoint.x + 10, y: layerY)
-        emitter.emitterSize = CGSize(width: 2, height: 2)
+        emitter.frame = layer.bounds
+        emitter.emitterPosition = CGPoint(x: emitterX, y: emitterY)
+        emitter.emitterSize = .zero
         emitter.emitterShape = .point
-        emitter.renderMode = .oldestFirst
 
-        let colors: [NSColor] = [
-            .systemGreen, .systemYellow, .systemOrange,
-            .systemPink, .systemBlue, .systemPurple, .systemRed,
+        let colors: [CGColor] = [
+            NSColor.systemGreen.cgColor,
+            NSColor.systemYellow.cgColor,
+            NSColor.systemOrange.cgColor,
+            NSColor.systemPink.cgColor,
+            NSColor.systemBlue.cgColor,
+            NSColor.systemPurple.cgColor,
+            NSColor.systemRed.cgColor,
         ]
 
-        emitter.emitterCells = colors.map { color in
-            let cell = CAEmitterCell()
-            cell.birthRate = 40
-            cell.lifetime = 1.8
-
-            // Shoot UP first — gravity pulls them down
-            cell.velocity = 250
-            cell.velocityRange = 100
-            cell.emissionLongitude = -.pi / 2   // upward
-            cell.emissionRange = .pi / 5         // narrow cone upward
-            cell.yAcceleration = 400             // gravity pulls down
-
-            cell.spin = 5
-            cell.spinRange = 6
-            cell.scale = 0.07
-            cell.scaleRange = 0.04
-            cell.scaleSpeed = -0.01
-            cell.alphaSpeed = -0.6
-
-            // Confetti pieces — small rectangles
-            let w: CGFloat = 14
-            let h: CGFloat = 8
-            let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
-                color.setFill()
+        // Create one confetti image, tint via cell.color
+        let img: CGImage = {
+            let sz = NSSize(width: 12, height: 8)
+            let nsImg = NSImage(size: sz, flipped: false) { rect in
+                NSColor.white.setFill()
                 NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5).fill()
                 return true
             }
-            cell.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            return nsImg.cgImage(forProposedRect: nil, context: nil, hints: nil)!
+        }()
+
+        emitter.emitterCells = colors.map { color in
+            let cell = CAEmitterCell()
+            cell.contents = img
+            cell.color = color
+            cell.birthRate = 30
+            cell.lifetime = 2.0
+
+            // Pop UP, then gravity pulls down
+            // In CALayer coords: negative Y = upward
+            cell.velocity = 200
+            cell.velocityRange = 80
+            cell.emissionLongitude = -.pi / 2   // upward in layer coords
+            cell.emissionRange = .pi / 4        // spread
+            cell.yAcceleration = 300            // gravity (positive = downward in layer)
+
+            cell.spin = 4
+            cell.spinRange = 8
+            cell.scale = 0.12
+            cell.scaleRange = 0.06
+            cell.alphaSpeed = -0.5
             return cell
         }
 
-        clipLayer.addSublayer(emitter)
+        layer.addSublayer(emitter)
 
-        // Short burst then stop
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        // Short burst
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             emitter.birthRate = 0
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             emitter.removeFromSuperlayer()
         }
     }
