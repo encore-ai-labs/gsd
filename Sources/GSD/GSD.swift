@@ -1124,433 +1124,82 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
     }
 }
 
+/// Custom NSTextView with checkbox clicks, Cmd+B/I, and Enter continuation.
+class MarkdownNSTextView: NSTextView {
+    var onCheckboxToggle: ((NSRange) -> Void)?
 
-// MARK: - Block Model
+    // MARK: Checkbox click detection
 
-struct TaskItem: Identifiable, Equatable {
-    let id: UUID
-    var text: String
-    var isChecked: Bool
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let index = characterIndexForInsertion(at: point)
+        let string = self.string as NSString
 
-    init(id: UUID = UUID(), text: String, isChecked: Bool) {
-        self.id = id
-        self.text = text
-        self.isChecked = isChecked
-    }
+        if index < string.length {
+            let lineRange = string.lineRange(
+                for: NSRange(location: min(index, string.length - 1), length: 0))
+            let line = string.substring(with: lineRange)
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-    var markdownLine: String {
-        isChecked ? "- [x] \(text)" : "- [ ] \(text)"
-    }
-}
-
-enum NoteBlock: Identifiable {
-    case text(id: UUID, content: String)
-    case tasks(id: UUID, items: [TaskItem])
-
-    var id: UUID {
-        switch self {
-        case .text(let id, _): return id
-        case .tasks(let id, _): return id
-        }
-    }
-}
-
-// MARK: - Note Parser
-
-struct NoteParser {
-
-    static func isCheckboxLine(_ trimmed: String) -> Bool {
-        trimmed.hasPrefix("- [ ] ") || trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ")
-            || trimmed == "- [ ]" || trimmed == "- [x]" || trimmed == "- [X]"
-    }
-
-    static func parse(_ markdown: String, previous: [NoteBlock] = []) -> [NoteBlock] {
-        let lines = markdown.components(separatedBy: "\n")
-        var blocks: [NoteBlock] = []
-        var i = 0
-
-        while i < lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-
-            if isCheckboxLine(trimmed) {
-                var items: [TaskItem] = []
-                while i < lines.count {
-                    let t = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard isCheckboxLine(t) else { break }
-                    let checked = t.hasPrefix("- [x] ") || t.hasPrefix("- [X] ")
-                        || t == "- [x]" || t == "- [X]"
-                    let taskText = t.count > 6 ? String(t.dropFirst(6)) : ""
-                    items.append(TaskItem(text: taskText, isChecked: checked))
-                    i += 1
-                }
-                blocks.append(.tasks(id: UUID(), items: items))
-            } else {
-                var textLines: [String] = []
-                while i < lines.count {
-                    let t = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard !isCheckboxLine(t) else { break }
-                    textLines.append(lines[i])
-                    i += 1
-                }
-                blocks.append(.text(id: UUID(), content: textLines.joined(separator: "\n")))
-            }
-        }
-
-        return reconcileIDs(new: blocks, previous: previous)
-    }
-
-    static func serialize(_ blocks: [NoteBlock]) -> String {
-        blocks.map { block in
-            switch block {
-            case .text(_, let content):
-                return content
-            case .tasks(_, let items):
-                return items.map(\.markdownLine).joined(separator: "\n")
-            }
-        }.joined(separator: "\n")
-    }
-
-    // Preserve UUIDs so SwiftUI tracks identity through re-parses
-    private static func reconcileIDs(new: [NoteBlock], previous: [NoteBlock]) -> [NoteBlock] {
-        guard !previous.isEmpty else { return new }
-        var result: [NoteBlock] = []
-        var prevIdx = 0
-
-        for block in new {
-            if prevIdx < previous.count {
-                let prev = previous[prevIdx]
-                switch (block, prev) {
-                case (.text(_, let content), .text(let oldID, _)):
-                    result.append(.text(id: oldID, content: content))
-                    prevIdx += 1
-                case (.tasks(_, let items), .tasks(let oldID, let oldItems)):
-                    let reconciled = reconcileTaskIDs(new: items, previous: oldItems)
-                    result.append(.tasks(id: oldID, items: reconciled))
-                    prevIdx += 1
-                default:
-                    result.append(block)
-                    prevIdx += 1
-                }
-            } else {
-                result.append(block)
-            }
-        }
-        return result
-    }
-
-    private static func reconcileTaskIDs(new: [TaskItem], previous: [TaskItem]) -> [TaskItem] {
-        var remaining = previous
-        return new.map { item in
-            if let idx = remaining.firstIndex(where: { $0.text == item.text }) {
-                let matched = remaining.remove(at: idx)
-                return TaskItem(id: matched.id, text: item.text, isChecked: item.isChecked)
-            }
-            return item
-        }
-    }
-}
-
-// MARK: - Block Store
-
-class BlockStore: ObservableObject {
-    @Published var blocks: [NoteBlock] = []
-
-    private weak var noteStore: NoteStore?
-    private var isSyncing = false
-
-    init(noteStore: NoteStore) {
-        self.noteStore = noteStore
-        blocks = NoteParser.parse(noteStore.text)
-    }
-
-    func reparse() {
-        guard let store = noteStore else { return }
-        isSyncing = true
-        blocks = NoteParser.parse(store.text, previous: blocks)
-        isSyncing = false
-    }
-
-    private func syncToStore() {
-        guard let store = noteStore, !isSyncing else { return }
-        store.text = NoteParser.serialize(blocks)
-        store.scheduleSave()
-    }
-
-    func toggleTask(_ taskID: UUID) {
-        for i in blocks.indices {
-            guard case .tasks(let blockID, var items) = blocks[i] else { continue }
-            guard let taskIdx = items.firstIndex(where: { $0.id == taskID }) else { continue }
-
-            items[taskIdx].isChecked.toggle()
-
-            // Stable sort: unchecked first, checked last
-            let unchecked = items.filter { !$0.isChecked }
-            let checked = items.filter { $0.isChecked }
-            items = unchecked + checked
-
-            withAnimation(.easeInOut(duration: 0.3)) {
-                blocks[i] = .tasks(id: blockID, items: items)
-            }
-            break
-        }
-
-        syncToStore()
-    }
-
-    func updateTextBlock(id: UUID, content: String) {
-        guard let idx = blocks.firstIndex(where: { $0.id == id }) else { return }
-        blocks[idx] = .text(id: id, content: content)
-        syncToStore()
-
-        // Re-parse if text now contains checkbox lines (user typed "- [ ] ")
-        let lines = content.components(separatedBy: "\n")
-        if lines.contains(where: { NoteParser.isCheckboxLine($0.trimmingCharacters(in: .whitespaces)) }) {
-            reparse()
-        }
-    }
-
-    func updateTaskText(taskID: UUID, text: String) {
-        for i in blocks.indices {
-            guard case .tasks(let blockID, var items) = blocks[i] else { continue }
-            guard let taskIdx = items.firstIndex(where: { $0.id == taskID }) else { continue }
-            items[taskIdx].text = text
-            blocks[i] = .tasks(id: blockID, items: items)
-            break
-        }
-        syncToStore()
-    }
-
-    /// Insert a new task. Returns the new task's ID for focus management.
-    @discardableResult
-    func addTask(inBlock blockID: UUID, text: String, after taskID: UUID? = nil) -> UUID {
-        let newItem = TaskItem(text: text, isChecked: false)
-
-        if let idx = blocks.firstIndex(where: { $0.id == blockID }),
-           case .tasks(let id, var items) = blocks[idx]
-        {
-            if let afterID = taskID,
-               let afterIdx = items.firstIndex(where: { $0.id == afterID })
+            if trimmed.hasPrefix("- [ ]") || trimmed.hasPrefix("- [x]")
+                || trimmed.hasPrefix("- [X]")
             {
-                items.insert(newItem, at: afterIdx + 1)
-            } else {
-                let firstChecked = items.firstIndex(where: { $0.isChecked }) ?? items.endIndex
-                items.insert(newItem, at: firstChecked)
-            }
-            blocks[idx] = .tasks(id: id, items: items)
-        }
-
-        syncToStore()
-        return newItem.id
-    }
-
-    func deleteTask(_ taskID: UUID) {
-        for i in blocks.indices {
-            guard case .tasks(let blockID, var items) = blocks[i] else { continue }
-            items.removeAll { $0.id == taskID }
-            if items.isEmpty {
-                blocks.remove(at: i)
-            } else {
-                blocks[i] = .tasks(id: blockID, items: items)
-            }
-            break
-        }
-        syncToStore()
-    }
-}
-
-// MARK: - Checkbox Row
-
-struct CheckboxRow: View {
-    let item: TaskItem
-    let onToggle: () -> Void
-    let onTextChange: (String) -> Void
-    let onSubmit: () -> Void
-    @State private var isEditing = false
-    @State private var editText: String
-
-    init(item: TaskItem, onToggle: @escaping () -> Void,
-         onTextChange: @escaping (String) -> Void,
-         onSubmit: @escaping () -> Void)
-    {
-        self.item = item
-        self.onToggle = onToggle
-        self.onTextChange = onTextChange
-        self.onSubmit = onSubmit
-        self._editText = State(initialValue: item.text)
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            Text(item.isChecked ? "- [x]" : "- [ ]")
-                .font(.system(size: 15, weight: .medium, design: .monospaced))
-                .foregroundColor(
-                    item.isChecked
-                        ? Color(nsColor: .systemGreen).opacity(0.7)
-                        : Color(nsColor: .systemOrange)
-                )
-                .onTapGesture { onToggle() }
-                .onHover { hovering in
-                    if hovering { NSCursor.pointingHand.push() }
-                    else { NSCursor.pop() }
+                let offsetInLine = index - lineRange.location
+                if offsetInLine < 6 {
+                    onCheckboxToggle?(lineRange)
+                    return
                 }
-
-            Text(" ")
-                .font(.system(size: 14))
-
-            if isEditing {
-                TextField("", text: $editText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .foregroundColor(
-                        item.isChecked
-                            ? Color(nsColor: .secondaryLabelColor)
-                            : Color(nsColor: .labelColor)
-                    )
-                    .onSubmit {
-                        isEditing = false
-                        onSubmit()
-                    }
-                    .onChange(of: editText) { newValue in
-                        onTextChange(newValue)
-                    }
-            } else {
-                Text(item.text)
-                    .font(.system(size: 14))
-                    .foregroundColor(
-                        item.isChecked
-                            ? Color(nsColor: .secondaryLabelColor)
-                            : Color(nsColor: .labelColor)
-                    )
-                    .strikethrough(item.isChecked, color: Color(nsColor: .secondaryLabelColor))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        editText = item.text
-                        isEditing = true
-                    }
             }
         }
-        .padding(.vertical, 3)
-        .contentShape(Rectangle())
-        .onChange(of: item.text) { newValue in
-            if editText != newValue { editText = newValue }
-        }
-    }
-}
 
-// MARK: - Text Block View (auto-sizing NSTextView)
-
-struct TextBlockView: NSViewRepresentable {
-    let blockID: UUID
-    @Binding var content: String
-    let styler: MarkdownStyler
-
-    func makeNSView(context: Context) -> AutoSizingTextView {
-        let tv = AutoSizingTextView()
-        tv.isVerticallyResizable = true
-        tv.isHorizontallyResizable = false
-        tv.autoresizingMask = [.width]
-        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        tv.drawsBackground = false
-        tv.textContainerInset = NSSize(width: 0, height: 2)
-        tv.allowsUndo = true
-        tv.isEditable = true
-        tv.isSelectable = true
-        tv.isRichText = true
-        tv.font = MarkdownStyler.baseFont
-        tv.textColor = .labelColor
-        tv.insertionPointColor = .controlAccentColor
-        tv.isAutomaticQuoteSubstitutionEnabled = false
-        tv.isAutomaticDashSubstitutionEnabled = false
-        tv.isAutomaticTextReplacementEnabled = false
-        tv.isAutomaticSpellingCorrectionEnabled = false
-        tv.textContainer?.widthTracksTextView = true
-        tv.textContainer?.lineFragmentPadding = 0
-
-        tv.textStorage?.delegate = styler
-        tv.delegate = context.coordinator
-
-        context.coordinator.isSyncing = true
-        tv.string = content
-        styler.applyMarkdown(to: tv.textStorage!)
-        context.coordinator.isSyncing = false
-
-        context.coordinator.textView = tv
-        return tv
+        super.mouseDown(with: event)
     }
 
-    func updateNSView(_ tv: AutoSizingTextView, context: Context) {
-        context.coordinator.parent = self
-        if tv.string != content {
-            context.coordinator.isSyncing = true
-            tv.string = content
-            styler.applyMarkdown(to: tv.textStorage!)
-            context.coordinator.isSyncing = false
-        }
-        tv.invalidateIntrinsicContentSize()
-    }
+    // MARK: Keyboard shortcuts (Cmd+C/V/X/Z/A/B/I)
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: TextBlockView
-        weak var textView: AutoSizingTextView?
-        var isSyncing = false
-
-        init(_ parent: TextBlockView) { self.parent = parent }
-
-        func textDidChange(_ notification: Notification) {
-            guard !isSyncing, let tv = notification.object as? NSTextView else { return }
-            parent.content = tv.string
-        }
-    }
-}
-
-/// NSTextView that reports its intrinsic height based on content.
-class AutoSizingTextView: NSTextView {
-
-    override var intrinsicContentSize: NSSize {
-        guard let lm = layoutManager, let tc = textContainer else {
-            return super.intrinsicContentSize
-        }
-        lm.ensureLayout(for: tc)
-        let used = lm.usedRect(for: tc)
-        return NSSize(
-            width: NSView.noIntrinsicMetric,
-            height: used.height + textContainerInset.height * 2)
-    }
-
-    override func didChangeText() {
-        super.didChangeText()
-        invalidateIntrinsicContentSize()
-    }
-
-    // Cmd+C/V/X/Z/A support (SwiftUI hosting layer intercepts these)
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.modifierFlags.contains(.command),
-              let chars = event.charactersIgnoringModifiers
-        else { return super.performKeyEquivalent(with: event) }
-
-        switch chars {
-        case "c": copy(nil); return true
-        case "x": cut(nil); return true
-        case "v": pasteAsPlainText(nil); return true
-        case "a": selectAll(nil); return true
-        case "z":
-            if event.modifierFlags.contains(.shift) { undoManager?.redo() }
-            else { undoManager?.undo() }
-            return true
-        case "b":
-            wrapSelection(prefix: "**", suffix: "**"); return true
-        case "i":
-            wrapSelection(prefix: "*", suffix: "*"); return true
-        default:
+            let chars = event.charactersIgnoringModifiers
+        else {
             return super.performKeyEquivalent(with: event)
         }
-    }
 
-    private func wrapSelection(prefix: String, suffix: String) {
+        // Standard editing shortcuts — must be handled explicitly because
+        // SwiftUI's hosting layer can swallow them before NSTextView sees them.
+        switch chars {
+        case "c":
+            copy(nil)
+            return true
+        case "x":
+            cut(nil)
+            return true
+        case "v":
+            pasteAsPlainText(nil)
+            return true
+        case "a":
+            selectAll(nil)
+            return true
+        case "z":
+            if event.modifierFlags.contains(.shift) {
+                undoManager?.redo()
+            } else {
+                undoManager?.undo()
+            }
+            return true
+        default:
+            break
+        }
+
+        // Markdown formatting shortcuts
+        let prefix: String
+        let suffix: String
+
+        switch chars {
+        case "b": prefix = "**"; suffix = "**"
+        case "i": prefix = "*"; suffix = "*"
+        default: return super.performKeyEquivalent(with: event)
+        }
+
         let range = selectedRange()
         let ns = self.string as NSString
 
@@ -1560,20 +1209,31 @@ class AutoSizingTextView: NSTextView {
             setSelectedRange(NSRange(location: range.location + prefix.count, length: 0))
         } else {
             let selected = ns.substring(with: range)
-            let pLen = prefix.count, sLen = suffix.count
-            if range.location >= pLen && (range.location + range.length + sLen) <= ns.length {
-                let before = ns.substring(with: NSRange(location: range.location - pLen, length: pLen))
-                let after = ns.substring(with: NSRange(location: range.location + range.length, length: sLen))
+            let pLen = prefix.count
+            let sLen = suffix.count
+
+            // Toggle off if already wrapped
+            if range.location >= pLen
+                && (range.location + range.length + sLen) <= ns.length
+            {
+                let before = ns.substring(
+                    with: NSRange(location: range.location - pLen, length: pLen))
+                let after = ns.substring(
+                    with: NSRange(location: range.location + range.length, length: sLen))
                 if before == prefix && after == suffix {
-                    let full = NSRange(location: range.location - pLen, length: range.length + pLen + sLen)
-                    if shouldChangeText(in: full, replacementString: selected) {
-                        replaceCharacters(in: full, with: selected)
+                    let fullRange = NSRange(
+                        location: range.location - pLen, length: range.length + pLen + sLen)
+                    if shouldChangeText(in: fullRange, replacementString: selected) {
+                        replaceCharacters(in: fullRange, with: selected)
                         didChangeText()
                     }
-                    setSelectedRange(NSRange(location: range.location - pLen, length: selected.count))
-                    return
+                    setSelectedRange(
+                        NSRange(location: range.location - pLen, length: selected.count))
+                    return true
                 }
             }
+
+            // Wrap selection
             let replacement = prefix + selected + suffix
             if shouldChangeText(in: range, replacementString: replacement) {
                 replaceCharacters(in: range, with: replacement)
@@ -1581,10 +1241,269 @@ class AutoSizingTextView: NSTextView {
             }
             setSelectedRange(NSRange(location: range.location + pLen, length: selected.count))
         }
+
+        return true
     }
 
-    override func paste(_ sender: Any?) {
-        pasteAsPlainText(sender)
+    // MARK: Enter – continue checkboxes / bullets
+
+    override func insertNewline(_ sender: Any?) {
+        let ns = self.string as NSString
+        let cursor = selectedRange().location
+        guard cursor <= ns.length else {
+            super.insertNewline(sender)
+            return
+        }
+
+        let lineRange = ns.lineRange(for: NSRange(location: min(cursor, max(ns.length - 1, 0)), length: 0))
+        let line = ns.substring(with: lineRange).trimmingCharacters(in: .newlines)
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+        // Checkbox continuation
+        if trimmed.hasPrefix("- [ ] ") || trimmed.hasPrefix("- [x] ")
+            || trimmed.hasPrefix("- [X] ")
+        {
+            let taskText = trimmed.count > 6
+                ? String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces) : ""
+            if taskText.isEmpty {
+                let prefixRange = (line as NSString).range(of: trimmed)
+                if prefixRange.location != NSNotFound {
+                    let abs = NSRange(
+                        location: lineRange.location + prefixRange.location,
+                        length: prefixRange.length)
+                    if shouldChangeText(in: abs, replacementString: "") {
+                        replaceCharacters(in: abs, with: "")
+                        didChangeText()
+                    }
+                }
+                return
+            }
+            super.insertNewline(sender)
+            insertText("- [ ] ", replacementRange: selectedRange())
+            return
+        }
+
+        // Bullet continuation
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+            let content = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            if content.isEmpty {
+                let prefixRange = (line as NSString).range(of: trimmed)
+                if prefixRange.location != NSNotFound {
+                    let abs = NSRange(
+                        location: lineRange.location + prefixRange.location,
+                        length: prefixRange.length)
+                    if shouldChangeText(in: abs, replacementString: "") {
+                        replaceCharacters(in: abs, with: "")
+                        didChangeText()
+                    }
+                }
+                return
+            }
+            let bulletPrefix = String(trimmed.prefix(2))
+            super.insertNewline(sender)
+            insertText(bulletPrefix, replacementRange: selectedRange())
+            return
+        }
+
+        super.insertNewline(sender)
+    }
+}
+
+/// Sorts contiguous blocks of checkbox lines: unchecked first, checked last.
+/// Preserves relative order within each group (stable partition).
+/// Converts markdown checkbox syntax to visual circles for display.
+///   `- [ ] task` → `○ task`    `- [x] task` → `● task`
+private func displayText(from storage: String) -> String {
+    storage.components(separatedBy: "\n").map { line in
+        if line.hasPrefix("- [x] ") || line.hasPrefix("- [X] ") {
+            return "● " + String(line.dropFirst(6))
+        } else if line.hasPrefix("- [ ] ") {
+            return "○ " + String(line.dropFirst(6))
+        }
+        return line
+    }.joined(separator: "\n")
+}
+
+/// Converts visual circles back to markdown checkbox syntax for storage.
+private func storageText(from display: String) -> String {
+    display.components(separatedBy: "\n").map { line in
+        if line.hasPrefix("● ") {
+            return "- [x] " + String(line.dropFirst(2))
+        } else if line.hasPrefix("○ ") {
+            return "- [ ] " + String(line.dropFirst(2))
+        }
+        return line
+    }.joined(separator: "\n")
+}
+
+private func sortCheckboxBlocks(in text: String) -> String {
+    var lines = text.components(separatedBy: "\n")
+    var i = 0
+
+    while i < lines.count {
+        let t = lines[i].trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("- [ ]") || t.hasPrefix("- [x]") || t.hasPrefix("- [X]") {
+            let blockStart = i
+            while i < lines.count {
+                let lt = lines[i].trimmingCharacters(in: .whitespaces)
+                guard lt.hasPrefix("- [ ]") || lt.hasPrefix("- [x]") || lt.hasPrefix("- [X]")
+                else { break }
+                i += 1
+            }
+
+            let block = Array(lines[blockStart..<i])
+            let unchecked = block.filter {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("- [ ]")
+            }
+            let checked = block.filter {
+                let s = $0.trimmingCharacters(in: .whitespaces)
+                return s.hasPrefix("- [x]") || s.hasPrefix("- [X]")
+            }
+            let sorted = unchecked + checked
+
+            for j in blockStart..<i {
+                lines[j] = sorted[j - blockStart]
+            }
+        } else {
+            i += 1
+        }
+    }
+
+    return lines.joined(separator: "\n")
+}
+
+/// SwiftUI wrapper for the full markdown editor.
+struct MarkdownEditorView: NSViewRepresentable {
+    @Binding var text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+
+        let textContainer = NSTextContainer(
+            size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+
+        let layoutManager = NSLayoutManager()
+        layoutManager.addTextContainer(textContainer)
+
+        let textStorage = NSTextStorage()
+        textStorage.addLayoutManager(layoutManager)
+
+        let textView = MarkdownNSTextView(frame: .zero, textContainer: textContainer)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude)
+        textView.minSize = NSSize(width: 0, height: 0)
+
+        textView.allowsUndo = true
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 16, height: 14)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.font = MarkdownStyler.baseFont
+        textView.textColor = .labelColor
+        textView.insertionPointColor = .controlAccentColor
+        textView.selectedTextAttributes = [
+            .backgroundColor: NSColor.selectedTextBackgroundColor
+        ]
+
+        // Wire up styler & delegate
+        let styler = context.coordinator.styler
+        textStorage.delegate = styler
+        textView.delegate = context.coordinator
+
+        // Checkbox toggle
+        textView.onCheckboxToggle = { lineRange in
+            context.coordinator.toggleCheckbox(in: textView, lineRange: lineRange)
+        }
+
+        // Initial content
+        context.coordinator.isSyncing = true
+        textView.string = text
+        styler.applyMarkdown(to: textView.textStorage!)
+        context.coordinator.isSyncing = false
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? MarkdownNSTextView else { return }
+        if textView.string != text {
+            context.coordinator.isSyncing = true
+            let sel = textView.selectedRange()
+            textView.string = text
+            context.coordinator.styler.applyMarkdown(to: textView.textStorage!)
+            let maxLoc = (textView.string as NSString).length
+            textView.setSelectedRange(
+                NSRange(
+                    location: min(sel.location, maxLoc),
+                    length: min(sel.length, maxLoc - min(sel.location, maxLoc))))
+            context.coordinator.isSyncing = false
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: MarkdownEditorView
+        let styler = MarkdownStyler()
+        weak var textView: MarkdownNSTextView?
+        var isSyncing = false
+
+        init(_ parent: MarkdownEditorView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard !isSyncing, let tv = notification.object as? NSTextView else { return }
+            parent.text = tv.string
+        }
+
+        func toggleCheckbox(in textView: MarkdownNSTextView, lineRange: NSRange) {
+            let string = textView.string as NSString
+            let line = string.substring(with: lineRange)
+
+            var newLine: String
+            if line.contains("- [ ]") {
+                newLine = line.replacingOccurrences(of: "- [ ]", with: "- [x]")
+            } else {
+                newLine = line.replacingOccurrences(of: "- [x]", with: "- [ ]")
+                    .replacingOccurrences(of: "- [X]", with: "- [ ]")
+            }
+
+            // Build toggled text, then sort checkbox blocks
+            var text = textView.string
+            if let range = Range(lineRange, in: text) {
+                text.replaceSubrange(range, with: newLine)
+            }
+            text = sortCheckboxBlocks(in: text)
+
+            // Apply as single change
+            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+            isSyncing = true
+            if textView.shouldChangeText(in: fullRange, replacementString: text) {
+                textView.replaceCharacters(in: fullRange, with: text)
+                textView.didChangeText()
+            }
+            parent.text = textView.string
+            isSyncing = false
+        }
     }
 }
 
@@ -1592,29 +1511,18 @@ class AutoSizingTextView: NSTextView {
 
 struct RichEditorView: View {
     @ObservedObject var store: NoteStore
-    @StateObject private var blockStore: BlockStore
     @State private var newTaskText: String = ""
-    @State private var focusedTaskID: UUID?
-
-    private let styler = MarkdownStyler()
-
-    init(store: NoteStore) {
-        self.store = store
-        self._blockStore = StateObject(wrappedValue: BlockStore(noteStore: store))
-    }
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(blockStore.blocks) { block in
-                        blockView(for: block)
+            MarkdownEditorView(
+                text: Binding(
+                    get: { store.text },
+                    set: { newValue in
+                        store.text = newValue
+                        store.scheduleSave()
                     }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+                ))
 
             Divider()
 
@@ -1629,7 +1537,7 @@ struct RichEditorView: View {
                     .onSubmit {
                         let trimmed = newTaskText.trimmingCharacters(in: .whitespaces)
                         guard !trimmed.isEmpty else { return }
-                        addTaskViaQuickBar(trimmed)
+                        addTask(trimmed)
                         newTaskText = ""
                     }
             }
@@ -1642,69 +1550,39 @@ struct RichEditorView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
         }
-        .onChange(of: store.text) { _ in
-            blockStore.reparse()
-        }
-        .onChange(of: store.currentDate) { _ in
-            blockStore.reparse()
-        }
     }
 
-    @ViewBuilder
-    private func blockView(for block: NoteBlock) -> some View {
-        switch block {
-        case .text(let id, let content):
-            TextBlockView(
-                blockID: id,
-                content: Binding(
-                    get: { content },
-                    set: { blockStore.updateTextBlock(id: id, content: $0) }
-                ),
-                styler: styler
-            )
-            .fixedSize(horizontal: false, vertical: true)
+    private func addTask(_ taskText: String) {
+        let lines = store.text.components(separatedBy: "\n")
+        let newTask = "- [ ] \(taskText)"
 
-        case .tasks(let blockID, let items):
-            ForEach(items) { item in
-                CheckboxRow(
-                    item: item,
-                    onToggle: {
-                        blockStore.toggleTask(item.id)
-                    },
-                    onTextChange: { newText in
-                        blockStore.updateTaskText(taskID: item.id, text: newText)
-                    },
-                    onSubmit: {
-                        if item.text.trimmingCharacters(in: .whitespaces).isEmpty {
-                            blockStore.deleteTask(item.id)
-                        } else {
-                            let newID = blockStore.addTask(inBlock: blockID, text: "", after: item.id)
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                focusedTaskID = newID
-                            }
-                        }
-                    }
-                )
+        if let todayIdx = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "## Today"
+        }) {
+            var insertAt = todayIdx + 1
+            for i in (todayIdx + 1)..<lines.count {
+                let t = lines[i].trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("## ") { break }
+                insertAt = i + 1
             }
+            while insertAt > todayIdx + 1
+                && lines[insertAt - 1].trimmingCharacters(in: .whitespaces).isEmpty
+            {
+                insertAt -= 1
+            }
+            var newLines = lines
+            newLines.insert(newTask, at: insertAt)
+            store.text = newLines.joined(separator: "\n")
+        } else if lines.allSatisfy({
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) {
+            store.text = "## Today\n\(newTask)"
+        } else {
+            store.text += "\n" + newTask
         }
-    }
 
-    private func addTaskViaQuickBar(_ text: String) {
-        // Find a tasks block to add to, or use NoteStore's addTask which handles
-        // "## Today" section detection
-        for block in blockStore.blocks {
-            if case .tasks(let blockID, _) = block {
-                let newID = blockStore.addTask(inBlock: blockID, text: text)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    focusedTaskID = newID
-                }
-                return
-            }
-        }
-        // No task block exists — use NoteStore's addTask which handles empty docs
-        store.text += store.text.isEmpty ? "- [ ] \(text)" : "\n- [ ] \(text)"
+        store.text = sortCheckboxBlocks(in: store.text)
         store.scheduleSave()
-        blockStore.reparse()
     }
 }
 
