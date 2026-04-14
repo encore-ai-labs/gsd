@@ -1507,6 +1507,7 @@ struct MarkdownEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
         guard let textView = scrollView.documentView as? MarkdownNSTextView else { return }
         if textView.string != text {
             context.coordinator.isSyncing = true
