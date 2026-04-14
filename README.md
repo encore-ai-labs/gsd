@@ -1,14 +1,24 @@
 # GSD — Get Sh*t Done
 
+<p align="center">
+  <img src="Resources/AppIcon.png" width="128" alt="GSD icon" />
+</p>
+
 A minimal menu bar todo app for macOS. Plain markdown files, zero cloud, keyboard-first.
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-blue) ![Swift](https://img.shields.io/badge/Swift-6.2-orange)
+
+<p align="center">
+  <img src="Resources/demo.png" width="420" alt="GSD in action" />
+  <br />
+  <em>Your daily tasks, one hotkey away.</em>
+</p>
 
 ## Install
 
 1. Download **GSD-1.0.0.dmg** from [Releases](https://github.com/encore-ai-labs/gsd/releases)
 2. Drag GSD to Applications
-3. On first launch: right-click > Open (required for ad-hoc signed apps)
+3. Launch — it's signed and notarized, opens without Gatekeeper warnings
 
 Or build from source:
 
