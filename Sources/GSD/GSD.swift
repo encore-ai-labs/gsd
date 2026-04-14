@@ -1173,12 +1173,11 @@ class MarkdownNSTextView: NSTextView {
             cell.birthRate = 20
             cell.lifetime = 3.0
 
-            // Rain downward (CALayer: -pi/2 = downward, negative yAccel = downward)
-            cell.velocity = 150
-            cell.velocityRange = 50
-            cell.emissionLongitude = -.pi / 2
-            cell.emissionRange = .pi / 6
-            cell.yAcceleration = -50
+            // Let gravity do all the work — no initial direction
+            cell.velocity = 0
+            cell.velocityRange = 30
+            cell.emissionRange = .pi * 2        // random directions, very slow
+            cell.yAcceleration = -200           // gravity pulls down (-Y in CALayer)
 
             cell.spin = 3
             cell.spinRange = 6
