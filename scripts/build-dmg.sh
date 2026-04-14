@@ -23,6 +23,9 @@ cp "${BUILD_DIR}/apple/Products/Release/${APP_NAME}" "${APP_BUNDLE}/Contents/Mac
 # Copy Info.plist
 cp "$(pwd)/Resources/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
 
+# Copy app icon
+cp "$(pwd)/Resources/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+
 echo "==> Ad-hoc code signing..."
 codesign --force --deep -s - "${APP_BUNDLE}"
 
