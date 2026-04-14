@@ -1141,7 +1141,7 @@ class MarkdownNSTextView: NSTextView {
         guard let layer = scrollView.layer else { return }
 
         let emitter = CAEmitterLayer()
-        emitter.emitterPosition = CGPoint(x: layer.bounds.midX, y: layer.bounds.height)
+        emitter.emitterPosition = CGPoint(x: layer.bounds.midX, y: 0)
         emitter.emitterSize = CGSize(width: layer.bounds.width, height: 1)
         emitter.emitterShape = .line
 
@@ -1177,7 +1177,7 @@ class MarkdownNSTextView: NSTextView {
             cell.velocity = 0
             cell.velocityRange = 30
             cell.emissionRange = .pi * 2        // random directions, very slow
-            cell.yAcceleration = -200           // gravity pulls down (-Y in CALayer)
+            cell.yAcceleration = 200
 
             cell.spin = 3
             cell.spinRange = 6
