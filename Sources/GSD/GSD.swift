@@ -714,8 +714,8 @@ struct NoteView: View {
                 .fixedSize()
             }
             .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
 
             if searchMode {
                 SearchView(store: store, query: $searchQuery, searchMode: $searchMode)
@@ -759,7 +759,7 @@ struct NoteView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 8)
+                .padding(.bottom, 12)
 
                 Divider()
 
