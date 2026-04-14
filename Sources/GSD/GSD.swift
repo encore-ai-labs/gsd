@@ -624,7 +624,7 @@ struct NoteView: View {
     @StateObject private var store = NoteStore()
     @State private var showingCalendar = false
     @State private var editingRaw = false
-    @AppStorage("confettiEnabled") private var confettiEnabled = true
+    @AppStorage("confettiEnabled") private var confettiEnabled = false
     @State private var showingNewNotebook = false
     @State private var newNotebookName = ""
     @State private var searchMode = false
@@ -691,7 +691,7 @@ struct NoteView: View {
                     }
 
                     Toggle(isOn: $confettiEnabled) {
-                        Label("Confetti", systemImage: "party.popper")
+                        Label("Confetti Mode", systemImage: "party.popper")
                     }
 
                     Divider()
@@ -1139,54 +1139,58 @@ class MarkdownNSTextView: NSTextView {
         wantsLayer = true
         guard let rootLayer = self.layer else { return }
 
-        // NSView coordinates are flipped vs CALayer — convert
+        // NSView is flipped vs CALayer
         let layerY = bounds.height - point.y
 
         let emitter = CAEmitterLayer()
-        emitter.emitterPosition = CGPoint(x: point.x, y: layerY)
-        emitter.emitterSize = CGSize(width: 4, height: 4)
+        emitter.emitterPosition = CGPoint(x: point.x + 10, y: layerY)
+        emitter.emitterSize = CGSize(width: 2, height: 2)
         emitter.emitterShape = .point
-        emitter.renderMode = .additive
+        emitter.renderMode = .oldestFirst
 
         let colors: [NSColor] = [
             .systemGreen, .systemYellow, .systemOrange,
-            .systemPink, .systemBlue, .systemPurple,
+            .systemPink, .systemBlue, .systemPurple, .systemRed,
         ]
 
         emitter.emitterCells = colors.map { color in
             let cell = CAEmitterCell()
-            cell.birthRate = 25
-            cell.lifetime = 1.2
-            cell.velocity = 180
-            cell.velocityRange = 80
-            cell.emissionLongitude = .pi / 2
-            cell.emissionRange = .pi
-            cell.spin = 4
-            cell.spinRange = 4
-            cell.scale = 0.09
-            cell.scaleRange = 0.04
-            cell.alphaSpeed = -0.8
+            cell.birthRate = 40
+            cell.lifetime = 1.8
 
-            // Tiny square confetti piece
-            let sz: CGFloat = 12
-            let img = NSImage(size: NSSize(width: sz, height: sz), flipped: false) { rect in
+            // Shoot UP first — gravity pulls them down
+            cell.velocity = 250
+            cell.velocityRange = 100
+            cell.emissionLongitude = -.pi / 2   // upward
+            cell.emissionRange = .pi / 5         // narrow cone upward
+            cell.yAcceleration = 400             // gravity pulls down
+
+            cell.spin = 5
+            cell.spinRange = 6
+            cell.scale = 0.07
+            cell.scaleRange = 0.04
+            cell.scaleSpeed = -0.01
+            cell.alphaSpeed = -0.6
+
+            // Confetti pieces — small rectangles
+            let w: CGFloat = 14
+            let h: CGFloat = 8
+            let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
                 color.setFill()
-                NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2).fill()
+                NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5).fill()
                 return true
             }
-            cell.contents = img.cgImage(
-                forProposedRect: nil, context: nil, hints: nil)
-
+            cell.contents = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
             return cell
         }
 
         rootLayer.addSublayer(emitter)
 
-        // Stop emitting after a short burst, then clean up
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        // Short burst then stop
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             emitter.birthRate = 0
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
             emitter.removeFromSuperlayer()
         }
     }
