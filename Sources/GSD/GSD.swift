@@ -624,7 +624,6 @@ struct NoteView: View {
     @StateObject private var store = NoteStore()
     @State private var showingCalendar = false
     @State private var editingRaw = false
-    @AppStorage("confettiEnabled") private var confettiEnabled = false
     @State private var showingNewNotebook = false
     @State private var newNotebookName = ""
     @State private var searchMode = false
@@ -688,10 +687,6 @@ struct NoteView: View {
 
                     Toggle(isOn: $editingRaw) {
                         Label("Edit Markdown", systemImage: "pencil.line")
-                    }
-
-                    Toggle(isOn: $confettiEnabled) {
-                        Label("Confetti Mode", systemImage: "party.popper")
                     }
 
                     Divider()
@@ -778,7 +773,7 @@ struct NoteView: View {
                             store.scheduleSave()
                         }
                 } else {
-                    RichEditorView(store: store, confettiEnabled: confettiEnabled)
+                    RichEditorView(store: store)
                 }
 
                 // Footer
@@ -1281,16 +1276,11 @@ class BlockStore: ObservableObject {
         store.scheduleSave()
     }
 
-    /// Toggle a task's checked state. Returns true if task was checked (for confetti).
-    @discardableResult
-    func toggleTask(_ taskID: UUID) -> Bool {
-        var wasUnchecked = false
-
+    func toggleTask(_ taskID: UUID) {
         for i in blocks.indices {
             guard case .tasks(let blockID, var items) = blocks[i] else { continue }
             guard let taskIdx = items.firstIndex(where: { $0.id == taskID }) else { continue }
 
-            wasUnchecked = !items[taskIdx].isChecked
             items[taskIdx].isChecked.toggle()
 
             // Stable sort: unchecked first, checked last
@@ -1305,7 +1295,6 @@ class BlockStore: ObservableObject {
         }
 
         syncToStore()
-        return wasUnchecked
     }
 
     func updateTextBlock(id: UUID, content: String) {
@@ -1376,6 +1365,7 @@ struct CheckboxRow: View {
     let onToggle: () -> Void
     let onTextChange: (String) -> Void
     let onSubmit: () -> Void
+    @State private var isEditing = false
     @State private var editText: String
 
     init(item: TaskItem, onToggle: @escaping () -> Void,
@@ -1407,25 +1397,45 @@ struct CheckboxRow: View {
             Text(" ")
                 .font(.system(size: 14))
 
-            TextField("", text: $editText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .foregroundColor(
-                    item.isChecked
-                        ? Color(nsColor: .secondaryLabelColor)
-                        : Color(nsColor: .labelColor)
-                )
-                .strikethrough(item.isChecked, color: Color(nsColor: .secondaryLabelColor))
-                .onSubmit { onSubmit() }
-                .onChange(of: editText) { newValue in
-                    onTextChange(newValue)
-                }
-                .onChange(of: item.text) { newValue in
-                    if editText != newValue { editText = newValue }
-                }
+            if isEditing {
+                TextField("", text: $editText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .foregroundColor(
+                        item.isChecked
+                            ? Color(nsColor: .secondaryLabelColor)
+                            : Color(nsColor: .labelColor)
+                    )
+                    .onSubmit {
+                        isEditing = false
+                        onSubmit()
+                    }
+                    .onChange(of: editText) { newValue in
+                        onTextChange(newValue)
+                    }
+            } else {
+                Text(item.text)
+                    .font(.system(size: 14))
+                    .foregroundColor(
+                        item.isChecked
+                            ? Color(nsColor: .secondaryLabelColor)
+                            : Color(nsColor: .labelColor)
+                    )
+                    .strikethrough(item.isChecked, color: Color(nsColor: .secondaryLabelColor))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        editText = item.text
+                        isEditing = true
+                    }
+            }
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
+        .onChange(of: item.text) { newValue in
+            if editText != newValue { editText = newValue }
+        }
     }
 }
 
@@ -1578,112 +1588,32 @@ class AutoSizingTextView: NSTextView {
     }
 }
 
-// MARK: - Confetti Overlay
-
-struct ConfettiOverlay: NSViewRepresentable {
-    @Binding var trigger: Bool
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        if trigger {
-            showConfetti(in: nsView)
-            DispatchQueue.main.async { trigger = false }
-        }
-    }
-
-    private func showConfetti(in view: NSView) {
-        guard let layer = view.layer else { return }
-
-        let emitter = CAEmitterLayer()
-        emitter.emitterPosition = CGPoint(x: layer.bounds.midX, y: 0)
-        emitter.emitterSize = CGSize(width: layer.bounds.width, height: 1)
-        emitter.emitterShape = .line
-
-        let colors: [CGColor] = [
-            NSColor.systemGreen.cgColor, NSColor.systemYellow.cgColor,
-            NSColor.systemOrange.cgColor, NSColor.systemPink.cgColor,
-            NSColor.systemBlue.cgColor, NSColor.systemPurple.cgColor,
-            NSColor.systemRed.cgColor,
-        ]
-
-        let img: CGImage = {
-            let sz = NSSize(width: 12, height: 8)
-            let nsImg = NSImage(size: sz, flipped: false) { rect in
-                NSColor.white.setFill()
-                NSBezierPath(roundedRect: rect, xRadius: 1.5, yRadius: 1.5).fill()
-                return true
-            }
-            return nsImg.cgImage(forProposedRect: nil, context: nil, hints: nil)!
-        }()
-
-        emitter.emitterCells = colors.map { color in
-            let cell = CAEmitterCell()
-            cell.contents = img
-            cell.color = color
-            cell.birthRate = 20
-            cell.lifetime = 3.0
-            cell.velocity = 0
-            cell.velocityRange = 30
-            cell.emissionRange = .pi * 2
-            cell.yAcceleration = 200
-            cell.spin = 3
-            cell.spinRange = 6
-            cell.scale = 0.1
-            cell.scaleRange = 0.05
-            cell.alphaSpeed = -0.4
-            return cell
-        }
-
-        layer.addSublayer(emitter)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            emitter.birthRate = 0
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-            emitter.removeFromSuperlayer()
-        }
-    }
-}
-
 // MARK: - Rich Editor
 
 struct RichEditorView: View {
     @ObservedObject var store: NoteStore
-    var confettiEnabled: Bool = true
     @StateObject private var blockStore: BlockStore
     @State private var newTaskText: String = ""
-    @State private var showConfetti = false
     @State private var focusedTaskID: UUID?
 
     private let styler = MarkdownStyler()
 
-    init(store: NoteStore, confettiEnabled: Bool = true) {
+    init(store: NoteStore) {
         self.store = store
-        self.confettiEnabled = confettiEnabled
         self._blockStore = StateObject(wrappedValue: BlockStore(noteStore: store))
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(blockStore.blocks) { block in
-                            blockView(for: block)
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(blockStore.blocks) { block in
+                        blockView(for: block)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-
-                ConfettiOverlay(trigger: $showConfetti)
-                    .allowsHitTesting(false)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Divider()
@@ -1739,10 +1669,7 @@ struct RichEditorView: View {
                 CheckboxRow(
                     item: item,
                     onToggle: {
-                        let wasCheck = blockStore.toggleTask(item.id)
-                        if wasCheck && confettiEnabled {
-                            showConfetti = true
-                        }
+                        blockStore.toggleTask(item.id)
                     },
                     onTextChange: { newText in
                         blockStore.updateTaskText(taskID: item.id, text: newText)
