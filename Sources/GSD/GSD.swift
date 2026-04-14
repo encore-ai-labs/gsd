@@ -1136,14 +1136,19 @@ class MarkdownNSTextView: NSTextView {
     // MARK: Confetti animation
 
     func showConfetti(at point: NSPoint) {
-        wantsLayer = true
-        guard let rootLayer = self.layer else { return }
+        // Add confetti to the scroll view's clip view so it stays in the visible area
+        guard let scrollView = enclosingScrollView,
+              let clipView = scrollView.contentView as? NSClipView else { return }
 
-        // NSView is flipped vs CALayer
-        let layerY = bounds.height - point.y
+        clipView.wantsLayer = true
+        guard let clipLayer = clipView.layer else { return }
+
+        // Convert point from text view coords to clip view coords
+        let clipPoint = convert(point, to: clipView)
+        let layerY = clipView.bounds.height - clipPoint.y
 
         let emitter = CAEmitterLayer()
-        emitter.emitterPosition = CGPoint(x: point.x + 10, y: layerY)
+        emitter.emitterPosition = CGPoint(x: clipPoint.x + 10, y: layerY)
         emitter.emitterSize = CGSize(width: 2, height: 2)
         emitter.emitterShape = .point
         emitter.renderMode = .oldestFirst
@@ -1184,7 +1189,7 @@ class MarkdownNSTextView: NSTextView {
             return cell
         }
 
-        rootLayer.addSublayer(emitter)
+        clipLayer.addSublayer(emitter)
 
         // Short burst then stop
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
