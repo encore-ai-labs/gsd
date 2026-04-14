@@ -9,7 +9,7 @@ A minimal menu bar todo app for macOS. Plain markdown files, zero cloud, keyboar
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-blue) ![Swift](https://img.shields.io/badge/Swift-6.2-orange)
 
 <p align="center">
-  <img src="Resources/demo.png" width="420" alt="GSD in action" />
+  <img src="Resources/demo.png" alt="GSD in action" />
   <br />
   <em>Your daily tasks, one hotkey away.</em>
 </p>
