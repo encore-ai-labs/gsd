@@ -1,4 +1,4 @@
-# GSD — Get Shit Done
+# GSD — Get Sh*t Done
 
 A minimal menu bar todo app for macOS. Plain markdown files, zero cloud, keyboard-first.
 
