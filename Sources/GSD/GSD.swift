@@ -656,12 +656,11 @@ struct NoteView: View {
                             .font(.system(size: 11))
                         Text(store.currentNotebook)
                             .font(.system(size: 12, weight: .medium))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 8, weight: .semibold))
                     }
                     .foregroundColor(.secondary)
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
 
                 Spacer()
@@ -711,6 +710,7 @@ struct NoteView: View {
                         .foregroundColor(.secondary)
                 }
                 .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
                 .fixedSize()
             }
             .padding(.horizontal, 16)
@@ -1262,7 +1262,6 @@ class MarkdownNSTextView: NSTextView {
             let taskText = trimmed.count > 6
                 ? String(trimmed.dropFirst(6)).trimmingCharacters(in: .whitespaces) : ""
             if taskText.isEmpty {
-                // Empty checkbox – clear the prefix
                 let prefixRange = (line as NSString).range(of: trimmed)
                 if prefixRange.location != NSNotFound {
                     let abs = NSRange(
@@ -1308,6 +1307,31 @@ class MarkdownNSTextView: NSTextView {
 
 /// Sorts contiguous blocks of checkbox lines: unchecked first, checked last.
 /// Preserves relative order within each group (stable partition).
+/// Converts markdown checkbox syntax to visual circles for display.
+///   `- [ ] task` → `○ task`    `- [x] task` → `● task`
+private func displayText(from storage: String) -> String {
+    storage.components(separatedBy: "\n").map { line in
+        if line.hasPrefix("- [x] ") || line.hasPrefix("- [X] ") {
+            return "● " + String(line.dropFirst(6))
+        } else if line.hasPrefix("- [ ] ") {
+            return "○ " + String(line.dropFirst(6))
+        }
+        return line
+    }.joined(separator: "\n")
+}
+
+/// Converts visual circles back to markdown checkbox syntax for storage.
+private func storageText(from display: String) -> String {
+    display.components(separatedBy: "\n").map { line in
+        if line.hasPrefix("● ") {
+            return "- [x] " + String(line.dropFirst(2))
+        } else if line.hasPrefix("○ ") {
+            return "- [ ] " + String(line.dropFirst(2))
+        }
+        return line
+    }.joined(separator: "\n")
+}
+
 private func sortCheckboxBlocks(in text: String) -> String {
     var lines = text.components(separatedBy: "\n")
     var i = 0
