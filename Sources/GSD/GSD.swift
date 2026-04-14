@@ -1126,18 +1126,21 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
 
 /// Custom NSTextView with checkbox clicks, Cmd+B/I, and Enter continuation.
 class MarkdownNSTextView: NSTextView {
-    var onCheckboxToggle: ((NSRange) -> Void)?
+    var onCheckboxToggle: ((NSRange, NSPoint) -> Void)?
 
     // MARK: Confetti animation
 
-    func showConfetti() {
+    func showConfetti(at point: NSPoint) {
         wantsLayer = true
         guard let rootLayer = self.layer else { return }
 
+        // NSView coordinates are flipped vs CALayer — convert
+        let layerY = bounds.height - point.y
+
         let emitter = CAEmitterLayer()
-        emitter.emitterPosition = CGPoint(x: bounds.midX, y: 0)
-        emitter.emitterSize = CGSize(width: bounds.width, height: 1)
-        emitter.emitterShape = .line
+        emitter.emitterPosition = CGPoint(x: point.x, y: layerY)
+        emitter.emitterSize = CGSize(width: 4, height: 4)
+        emitter.emitterShape = .point
         emitter.renderMode = .additive
 
         let colors: [NSColor] = [
@@ -1151,8 +1154,8 @@ class MarkdownNSTextView: NSTextView {
             cell.lifetime = 1.2
             cell.velocity = 180
             cell.velocityRange = 80
-            cell.emissionLongitude = .pi
-            cell.emissionRange = .pi / 4
+            cell.emissionLongitude = .pi / 2
+            cell.emissionRange = .pi
             cell.spin = 4
             cell.spinRange = 4
             cell.scale = 0.05
@@ -1201,7 +1204,7 @@ class MarkdownNSTextView: NSTextView {
             {
                 let offsetInLine = index - lineRange.location
                 if offsetInLine < 6 {
-                    onCheckboxToggle?(lineRange)
+                    onCheckboxToggle?(lineRange, point)
                     return
                 }
             }
@@ -1481,8 +1484,8 @@ struct MarkdownEditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
 
         // Checkbox toggle
-        textView.onCheckboxToggle = { lineRange in
-            context.coordinator.toggleCheckbox(in: textView, lineRange: lineRange)
+        textView.onCheckboxToggle = { lineRange, clickPoint in
+            context.coordinator.toggleCheckbox(in: textView, lineRange: lineRange, clickPoint: clickPoint)
         }
 
         // Initial content
@@ -1530,7 +1533,7 @@ struct MarkdownEditorView: NSViewRepresentable {
             parent.text = tv.string
         }
 
-        func toggleCheckbox(in textView: MarkdownNSTextView, lineRange: NSRange) {
+        func toggleCheckbox(in textView: MarkdownNSTextView, lineRange: NSRange, clickPoint: NSPoint) {
             let string = textView.string as NSString
             let line = string.substring(with: lineRange)
 
@@ -1563,7 +1566,7 @@ struct MarkdownEditorView: NSViewRepresentable {
 
             // Confetti when checking off a task
             if wasUnchecked {
-                textView.showConfetti()
+                textView.showConfetti(at: clickPoint)
             }
         }
     }
