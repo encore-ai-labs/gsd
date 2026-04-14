@@ -1022,7 +1022,7 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
         else if trimmed.hasPrefix("- [x] ") || trimmed.hasPrefix("- [X] ") {
             let prefix = trimmed.hasPrefix("- [x] ") ? "- [x] " : "- [X] "
             if let pr = markerRange(in: line, prefix: prefix, baseLocation: range.location) {
-                storage.addAttribute(.foregroundColor, value: NSColor.systemOrange.withAlphaComponent(0.7), range: pr)
+                storage.addAttribute(.foregroundColor, value: NSColor.systemGreen.withAlphaComponent(0.7), range: pr)
                 storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 15, weight: .medium), range: pr)
                 storage.addAttribute(.cursor, value: NSCursor.pointingHand, range: pr)
             }
@@ -1041,7 +1041,7 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
         // Unchecked checkbox
         else if trimmed.hasPrefix("- [ ] ") {
             if let pr = markerRange(in: line, prefix: "- [ ] ", baseLocation: range.location) {
-                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: pr)
+                storage.addAttribute(.foregroundColor, value: NSColor.systemYellow, range: pr)
                 storage.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 15, weight: .medium), range: pr)
                 storage.addAttribute(.cursor, value: NSCursor.pointingHand, range: pr)
             }
