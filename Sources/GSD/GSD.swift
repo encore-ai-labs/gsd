@@ -1550,7 +1550,6 @@ struct MarkdownEditorView: NSViewRepresentable {
         func toggleCheckbox(in textView: MarkdownNSTextView, lineRange: NSRange, clickPoint: NSPoint) {
             let string = textView.string as NSString
             let line = string.substring(with: lineRange)
-
             let wasUnchecked = line.contains("- [ ]")
 
             var newLine: String
@@ -1561,42 +1560,99 @@ struct MarkdownEditorView: NSViewRepresentable {
                     .replacingOccurrences(of: "- [X]", with: "- [ ]")
             }
 
-            // Toggle the checkbox immediately (no sort yet)
+            // 1. Apply toggle (no sort yet)
             var toggled = textView.string
             if let range = Range(lineRange, in: toggled) {
                 toggled.replaceSubrange(range, with: newLine)
             }
+            applyText(toggled, in: textView)
 
-            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
-            isSyncing = true
-            if textView.shouldChangeText(in: fullRange, replacementString: toggled) {
-                textView.replaceCharacters(in: fullRange, with: toggled)
-                textView.didChangeText()
-            }
-            parent.text = textView.string
-            isSyncing = false
-
-            // Confetti first, then sort after a short delay
+            // 2. Confetti
             if wasUnchecked && parent.confettiEnabled {
                 textView.showConfetti()
             }
 
-            // Sort after confetti has a moment to pop
-            let delay: Double = wasUnchecked && parent.confettiEnabled ? 0.35 : 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self = self else { return }
-                let sorted = sortCheckboxBlocks(in: textView.string)
-                if sorted != textView.string {
-                    let r = NSRange(location: 0, length: (textView.string as NSString).length)
-                    self.isSyncing = true
-                    if textView.shouldChangeText(in: r, replacementString: sorted) {
-                        textView.replaceCharacters(in: r, with: sorted)
-                        textView.didChangeText()
-                    }
-                    self.parent.text = textView.string
-                    self.isSyncing = false
-                }
+            // 3. Sort and animate
+            let sorted = sortCheckboxBlocks(in: toggled)
+            guard sorted != toggled,
+                  let scrollView = textView.enclosingScrollView,
+                  let lm = textView.layoutManager,
+                  let tc = textView.textContainer
+            else { return }
+
+            // Find the toggled line's current rect
+            let lineContent = newLine.trimmingCharacters(in: .newlines)
+            let toggledNS = toggled as NSString
+            let oldCharRange = toggledNS.range(of: lineContent)
+            guard oldCharRange.location != NSNotFound else {
+                applyText(sorted, in: textView)
+                return
             }
+            let oldFullLine = toggledNS.lineRange(for: oldCharRange)
+            let oldGlyphs = lm.glyphRange(forCharacterRange: oldFullLine, actualCharacterRange: nil)
+            var oldRect = lm.boundingRect(forGlyphRange: oldGlyphs, in: tc)
+            oldRect.origin.y += textView.textContainerInset.height
+            oldRect.origin.x = 0
+            oldRect.size.width = textView.bounds.width
+
+            // Snapshot the line
+            guard let bitmap = textView.bitmapImageRepForCachingDisplay(in: oldRect) else {
+                applyText(sorted, in: textView)
+                return
+            }
+            textView.cacheDisplay(in: oldRect, to: bitmap)
+
+            // 4. Apply sorted text (instant)
+            applyText(sorted, in: textView)
+
+            // Force layout so we can get the new rect
+            lm.ensureLayout(for: tc)
+
+            // Find the line's new rect
+            let sortedNS = sorted as NSString
+            let newCharRange = sortedNS.range(of: lineContent)
+            guard newCharRange.location != NSNotFound else { return }
+            let newFullLine = sortedNS.lineRange(for: newCharRange)
+            let newGlyphs = lm.glyphRange(forCharacterRange: newFullLine, actualCharacterRange: nil)
+            var newRect = lm.boundingRect(forGlyphRange: newGlyphs, in: tc)
+            newRect.origin.y += textView.textContainerInset.height
+            newRect.origin.x = 0
+            newRect.size.width = textView.bounds.width
+
+            // If it didn't actually move, nothing to animate
+            guard abs(oldRect.origin.y - newRect.origin.y) > 1 else { return }
+
+            // 5. Animate: overlay snapshot sliding from old pos to new pos
+            let oldInScroll = textView.convert(oldRect, to: scrollView)
+            let newInScroll = textView.convert(newRect, to: scrollView)
+
+            let snapshot = NSImageView()
+            snapshot.image = NSImage(size: oldRect.size)
+            snapshot.image?.addRepresentation(bitmap)
+            snapshot.frame = oldInScroll
+            snapshot.wantsLayer = true
+            snapshot.layer?.opacity = 0.95
+            scrollView.addSubview(snapshot)
+
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.3
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                snapshot.animator().frame = newInScroll
+                snapshot.animator().alphaValue = 0.5
+            }) {
+                snapshot.removeFromSuperview()
+            }
+        }
+
+        private func applyText(_ text: String, in textView: MarkdownNSTextView) {
+            let fullRange = NSRange(location: 0, length: (textView.string as NSString).length)
+            isSyncing = true
+            if textView.shouldChangeText(in: fullRange, replacementString: text) {
+                textView.replaceCharacters(in: fullRange, with: text)
+                textView.didChangeText()
+            }
+            parent.text = textView.string
+            isSyncing = false
         }
     }
 }
