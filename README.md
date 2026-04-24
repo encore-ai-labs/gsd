@@ -16,11 +16,17 @@ A minimal menu bar todo app for macOS. Plain markdown files, zero cloud, keyboar
 
 ## Install
 
-1. Download **GSD-1.0.0.dmg** from [Releases](https://github.com/encore-ai-labs/gsd/releases)
-2. Drag GSD to Applications
-3. Launch — it's signed and notarized, opens without Gatekeeper warnings
+**Homebrew (recommended):**
 
-Or build from source:
+```bash
+brew install --cask encore-ai-labs/gsd/gsd
+```
+
+Upgrades: `brew upgrade --cask gsd`.
+
+**Direct download:** grab the latest `GSD-<version>.dmg` from [Releases](https://github.com/encore-ai-labs/gsd/releases), drag GSD to Applications, launch. The app is signed with a Developer ID and notarized by Apple, so it opens without Gatekeeper warnings.
+
+**Build from source:**
 
 ```bash
 git clone https://github.com/encore-ai-labs/gsd.git
