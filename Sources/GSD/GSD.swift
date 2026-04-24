@@ -1,6 +1,15 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import SwiftUI
+
+// MARK: - Popover State (shared between AppDelegate and SwiftUI view)
+
+final class PopoverState: ObservableObject {
+    static let shared = PopoverState()
+    @Published var sticky: Bool = false
+    private init() {}
+}
 
 // MARK: - App Entry Point
 
@@ -22,6 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var popover: NSPopover!
     var eventMonitor: Any?
     var hotKeyManager = HotKeyManager()
+    private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LaunchAtLogin.migrateIfNeeded()
@@ -43,10 +53,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         eventMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
-            if let popover = self?.popover, popover.isShown {
-                popover.performClose(nil)
-            }
+            guard let self = self, self.popover.isShown else { return }
+            if PopoverState.shared.sticky { return }
+            self.popover.performClose(nil)
         }
+
+        PopoverState.shared.$sticky
+            .sink { [weak self] isSticky in
+                self?.popover.behavior = isSticky ? .applicationDefined : .transient
+            }
+            .store(in: &cancellables)
 
         // Register Cmd+0 global hotkey
         hotKeyManager.register(
@@ -622,6 +638,7 @@ struct SearchResult: Identifiable {
 
 struct NoteView: View {
     @StateObject private var store = NoteStore()
+    @ObservedObject private var popoverState = PopoverState.shared
     @State private var showingCalendar = false
     @State private var editingRaw = false
     @State private var showingNewNotebook = false
@@ -664,6 +681,15 @@ struct NoteView: View {
                 .fixedSize()
 
                 Spacer()
+
+                Button(action: { popoverState.sticky.toggle() }) {
+                    Image(systemName: popoverState.sticky ? "pin.fill" : "pin")
+                        .font(.system(size: 13))
+                        .foregroundColor(popoverState.sticky ? .accentColor : .secondary)
+                        .rotationEffect(.degrees(popoverState.sticky ? -30 : 0))
+                }
+                .buttonStyle(.plain)
+                .help(popoverState.sticky ? "Unpin (close on outside click)" : "Pin (stay open)")
 
                 Button(action: { searchMode.toggle(); if !searchMode { searchQuery = "" } }) {
                     Image(systemName: searchMode ? "xmark" : "magnifyingglass")
@@ -1046,12 +1072,14 @@ class MarkdownStyler: NSObject, NSTextStorageDelegate {
                 storage.addAttribute(.cursor, value: NSCursor.pointingHand, range: pr)
             }
         }
-        // Bullet
+        // Bullet — use secondaryLabelColor so the dash stays legible on
+        // translucent popover backgrounds (tertiaryLabelColor was so faint it
+        // looked white/invisible on .ultraThinMaterial).
         else if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
             if let pr = markerRange(
                 in: line, prefix: String(trimmed.prefix(2)), baseLocation: range.location)
             {
-                storage.addAttribute(.foregroundColor, value: Self.markerColor, range: pr)
+                storage.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: pr)
             }
         }
     }
