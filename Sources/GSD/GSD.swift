@@ -1159,10 +1159,14 @@ class MarkdownNSTextView: NSTextView {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.modifierFlags.contains(.command),
-            let chars = event.charactersIgnoringModifiers
+            let rawChars = event.charactersIgnoringModifiers
         else {
             return super.performKeyEquivalent(with: event)
         }
+
+        // `charactersIgnoringModifiers` keeps Shift applied, so Cmd+Shift+Z
+        // arrives as "Z" — lowercase so redo matches the "z" branch below.
+        let chars = rawChars.lowercased()
 
         // Standard editing shortcuts — must be handled explicitly because
         // SwiftUI's hosting layer can swallow them before NSTextView sees them.

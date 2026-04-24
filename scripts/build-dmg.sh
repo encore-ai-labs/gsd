@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="GSD"
-VERSION="1.0.0"
+VERSION="1.0.1"
 DMG_NAME="${APP_NAME}-${VERSION}"
 BUILD_DIR="$(pwd)/.build"
 APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
