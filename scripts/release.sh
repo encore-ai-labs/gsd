@@ -21,8 +21,8 @@ if [[ "${BRANCH}" != "main" ]]; then
     exit 1
 fi
 
-if [[ -n "$(git status --porcelain)" ]]; then
-    echo "error: working tree is dirty" >&2
+if ! git diff-index --quiet HEAD --; then
+    echo "error: tracked files have uncommitted changes" >&2
     exit 1
 fi
 
