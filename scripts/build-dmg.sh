@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="GSD"
-VERSION="1.0.1"
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$(pwd)/Resources/Info.plist")"
 DMG_NAME="${APP_NAME}-${VERSION}"
 BUILD_DIR="$(pwd)/.build"
 APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
