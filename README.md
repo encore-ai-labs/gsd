@@ -46,6 +46,21 @@ swift build -c release --arch arm64 --arch x86_64
 - Unchecked tasks sort to the top, checked sink to the bottom
 - Incomplete tasks automatically carry forward to the next day
 
+### Pointer-safe screenshots
+
+Press **Cmd+Shift+2** while the pointer is over a hover state, tooltip, menu, or other
+UI you want to preserve. GSD opens a non-activating selection overlay, so the pointer
+does not move and the app underneath keeps focus.
+
+- **Arrow keys** move the capture area; **Option+Arrow** moves it one point
+- **Shift+Arrow** resizes the area; **Space** cycles common sizes
+- **Return** captures; **Escape** cancels
+- In the preview, **Return** or **Cmd+C** copies the image; **Escape** discards it
+- Uncopied captures auto-discard after 20 seconds
+
+Screenshots are ephemeral: GSD keeps the pending image in memory and never writes a
+screenshot file to disk. Copying places TIFF image data on the macOS clipboard.
+
 ## Features
 
 - **Menu bar app** — lives in your status bar, one hotkey away
@@ -56,6 +71,8 @@ swift build -c release --arch arm64 --arch x86_64
 - **Search** — full-text search across all your notes
 - **Carry-forward** — unchecked tasks from yesterday auto-populate today's note
 - **Dark mode** — follows system appearance
+- **Pointer-safe screenshots** — capture hover UI by keyboard without moving the pointer
+- **No screenshot files** — uncopied captures stay in memory and auto-discard
 
 ## Data
 

@@ -31,6 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var popover: NSPopover!
     var eventMonitor: Any?
     var hotKeyManager = HotKeyManager()
+    private let hoverScreenshotController = HoverScreenshotController()
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -71,6 +72,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] in
             self?.togglePopover()
         }
+
+        // Start a pointer-safe screenshot without moving or clicking the mouse.
+        hotKeyManager.register(
+            keyCode: UInt32(kVK_ANSI_2),
+            modifiers: UInt32(cmdKey | shiftKey)
+        ) { [weak self] in
+            self?.beginHoverScreenshot()
+        }
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(beginHoverScreenshot),
+            name: .beginHoverScreenshot,
+            object: nil
+        )
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(self)
     }
 
     @objc func togglePopover() {
@@ -85,21 +105,75 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             popover.contentViewController?.view.window?.makeKey()
         }
     }
+
+    @objc private func beginHoverScreenshot() {
+        if popover.isShown {
+            popover.performClose(nil)
+        }
+        hoverScreenshotController.beginCapture()
+    }
 }
 
 // MARK: - Global Hotkey (Carbon)
 
 class HotKeyManager {
-    private var hotKeyRef: EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
-    private var callback: (() -> Void)?
+    private var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
+    private var callbacks: [UInt32: () -> Void] = [:]
+    private static var nextID: UInt32 = 1
+    private static let signature: OSType = 0x47534448 // "GSDH"
 
-    // Static storage so the C function pointer can reach back into Swift
-    private static var instance: HotKeyManager?
+    deinit {
+        unregisterAll()
+        if let handlerRef {
+            RemoveEventHandler(handlerRef)
+        }
+    }
 
-    func register(keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
-        callback = handler
-        HotKeyManager.instance = self
+    @discardableResult
+    func register(
+        keyCode: UInt32,
+        modifiers: UInt32,
+        handler: @escaping () -> Void
+    ) -> UInt32? {
+        installHandlerIfNeeded()
+
+        let id = Self.nextID
+        Self.nextID &+= 1
+        let hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
+        var hotKeyRef: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            keyCode,
+            modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+
+        guard status == noErr, let hotKeyRef else { return nil }
+        hotKeyRefs[id] = hotKeyRef
+        callbacks[id] = handler
+        return id
+    }
+
+    func unregister(_ id: UInt32) {
+        if let hotKeyRef = hotKeyRefs.removeValue(forKey: id) {
+            UnregisterEventHotKey(hotKeyRef)
+        }
+        callbacks.removeValue(forKey: id)
+    }
+
+    func unregisterAll() {
+        for hotKeyRef in hotKeyRefs.values {
+            UnregisterEventHotKey(hotKeyRef)
+        }
+        hotKeyRefs.removeAll()
+        callbacks.removeAll()
+    }
+
+    private func installHandlerIfNeeded() {
+        guard handlerRef == nil else { return }
 
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -108,26 +182,36 @@ class HotKeyManager {
 
         InstallEventHandler(
             GetApplicationEventTarget(),
-            { (_, _, _) -> OSStatus in
+            { (_, event, userData) -> OSStatus in
+                guard let event, let userData else { return OSStatus(eventNotHandledErr) }
+
+                var hotKeyID = EventHotKeyID()
+                let status = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotKeyID
+                )
+                guard status == noErr else { return status }
+
+                let manager = Unmanaged<HotKeyManager>
+                    .fromOpaque(userData)
+                    .takeUnretainedValue()
+                guard let callback = manager.callbacks[hotKeyID.id] else {
+                    return OSStatus(eventNotHandledErr)
+                }
                 DispatchQueue.main.async {
-                    HotKeyManager.instance?.callback?()
+                    callback()
                 }
                 return noErr
             },
             1,
             &eventType,
-            nil,
+            Unmanaged.passUnretained(self).toOpaque(),
             &handlerRef
-        )
-
-        let hotKeyID = EventHotKeyID(signature: 0x444E4F54, id: 1)
-        RegisterEventHotKey(
-            keyCode,
-            modifiers,
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
         )
     }
 }
@@ -709,6 +793,15 @@ struct NoteView: View {
                     }
                     Button(action: { store.copyContents() }) {
                         Label("Copy Contents", systemImage: "doc.on.doc")
+                    }
+
+                    Button(action: {
+                        NotificationCenter.default.post(
+                            name: .beginHoverScreenshot,
+                            object: nil
+                        )
+                    }) {
+                        Label("Capture Hover Area...", systemImage: "viewfinder")
                     }
 
                     Toggle(isOn: $editingRaw) {
