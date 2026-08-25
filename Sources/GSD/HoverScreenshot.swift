@@ -18,6 +18,7 @@ final class HoverScreenshotController {
     private var selectionView: CaptureSelectionView?
     private var selectedScreen: NSScreen?
     private var selectionRect = NSRect.zero
+    private var frozenImage: CGImage?
     private var selectionTokens: [UInt32] = []
     private var previewTokens: [UInt32] = []
     private var pendingImage: NSImage?
@@ -41,7 +42,7 @@ final class HoverScreenshotController {
         discardPreview()
 
         guard hasScreenCapturePermission() else { return }
-        showSelection()
+        freezeScreen()
     }
 
     private func hasScreenCapturePermission() -> Bool {
@@ -69,14 +70,26 @@ final class HoverScreenshotController {
 
     // MARK: Selection
 
-    private func showSelection() {
+    private func freezeScreen() {
         let pointer = NSEvent.mouseLocation
         guard
             let screen = NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) })
                 ?? NSScreen.main
         else { return }
 
+        capture(rect: screen.frame, on: screen) { [weak self] image in
+            guard let self else { return }
+            guard let image else {
+                NSSound.beep()
+                return
+            }
+            self.showSelection(on: screen, pointer: pointer, frozenImage: image)
+        }
+    }
+
+    private func showSelection(on screen: NSScreen, pointer: NSPoint, frozenImage: CGImage) {
         selectedScreen = screen
+        self.frozenImage = frozenImage
         presetIndex = min(presetIndex, presets.count - 1)
         selectionRect = rectCentered(at: pointer, size: presets[presetIndex], in: screen.frame)
 
@@ -91,7 +104,7 @@ final class HoverScreenshotController {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
-        panel.ignoresMouseEvents = true
+        panel.ignoresMouseEvents = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [
             .canJoinAllSpaces,
@@ -100,8 +113,20 @@ final class HoverScreenshotController {
             .ignoresCycle,
         ]
 
-        let overlay = CaptureSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        let displayImage = NSImage(cgImage: frozenImage, size: screen.frame.size)
+        let overlay = CaptureSelectionView(
+            frame: NSRect(origin: .zero, size: screen.frame.size),
+            frozenImage: displayImage
+        )
         overlay.selectionRect = localSelectionRect(for: screen)
+        overlay.onSelectionChanged = { [weak self] localRect in
+            self?.setSelection(localRect: localRect, on: screen)
+        }
+        overlay.onSelectionCompleted = { [weak self] localRect in
+            guard let self else { return }
+            self.setSelection(localRect: localRect, on: screen)
+            self.captureSelection()
+        }
         panel.contentView = overlay
 
         selectionWindow = panel
@@ -216,27 +241,35 @@ final class HoverScreenshotController {
     }
 
     private func captureSelection() {
-        guard selectionWindow != nil else { return }
+        guard
+            selectionWindow != nil,
+            let screen = selectedScreen,
+            let frozenImage
+        else { return }
 
-        let rect = selectionRect.integral
-        let screen = selectedScreen
-        closeSelectionOverlay()
+        let localRect = localSelectionRect(for: screen).intersection(
+            NSRect(origin: .zero, size: screen.frame.size)
+        )
+        guard localRect.width >= 4, localRect.height >= 4 else { return }
 
-        // Let the transparent overlay leave the window server before capturing.
-        // The pointer never moves and the underlying app never becomes inactive.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            guard let self else { return }
-            self.capture(rect: rect, on: screen) { [weak self] cgImage in
-                guard let self else { return }
-                guard let cgImage else {
-                    NSSound.beep()
-                    return
-                }
+        let scaleX = CGFloat(frozenImage.width) / screen.frame.width
+        let scaleY = CGFloat(frozenImage.height) / screen.frame.height
+        let pixelRect = CGRect(
+            x: localRect.minX * scaleX,
+            y: (screen.frame.height - localRect.maxY) * scaleY,
+            width: localRect.width * scaleX,
+            height: localRect.height * scaleY
+        ).integral
 
-                let image = NSImage(cgImage: cgImage, size: rect.size)
-                self.showPreview(for: image, on: screen)
-            }
+        guard let croppedImage = frozenImage.cropping(to: pixelRect) else {
+            NSSound.beep()
+            return
         }
+
+        let outputSize = localRect.size
+        closeSelectionOverlay()
+        let image = NSImage(cgImage: croppedImage, size: outputSize)
+        showPreview(for: image, on: screen)
     }
 
     private func capture(
@@ -338,6 +371,7 @@ final class HoverScreenshotController {
         selectionWindow = nil
         selectionView = nil
         selectedScreen = nil
+        frozenImage = nil
         for token in selectionTokens {
             selectionHotKeys.unregister(token)
         }
@@ -456,6 +490,15 @@ final class HoverScreenshotController {
         )
     }
 
+    private func setSelection(localRect: NSRect, on screen: NSScreen) {
+        selectionRect = NSRect(
+            x: localRect.minX + screen.frame.minX,
+            y: localRect.minY + screen.frame.minY,
+            width: localRect.width,
+            height: localRect.height
+        )
+    }
+
     private func rectCentered(at point: NSPoint, size: NSSize, in bounds: NSRect) -> NSRect {
         let available = bounds.insetBy(dx: 16, dy: 16)
         let fittedSize = NSSize(
@@ -484,11 +527,80 @@ final class HoverScreenshotController {
 
 private final class CaptureSelectionView: NSView {
     var selectionRect = NSRect.zero
+    var onSelectionChanged: ((NSRect) -> Void)?
+    var onSelectionCompleted: ((NSRect) -> Void)?
+
+    private let frozenImage: NSImage
+    private var dragStart: NSPoint?
+    private var selectionBeforeDrag = NSRect.zero
+
+    init(frame frameRect: NSRect, frozenImage: NSImage) {
+        self.frozenImage = frozenImage
+        super.init(frame: frameRect)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
 
     override var isOpaque: Bool { false }
 
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .crosshair)
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = clampedPoint(convert(event.locationInWindow, from: nil))
+        dragStart = point
+        selectionBeforeDrag = selectionRect
+        selectionRect = NSRect(origin: point, size: .zero)
+        onSelectionChanged?(selectionRect)
+        needsDisplay = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let dragStart else { return }
+        let point = clampedPoint(convert(event.locationInWindow, from: nil))
+        selectionRect = NSRect(
+            x: min(dragStart.x, point.x),
+            y: min(dragStart.y, point.y),
+            width: abs(point.x - dragStart.x),
+            height: abs(point.y - dragStart.y)
+        )
+        onSelectionChanged?(selectionRect)
+        needsDisplay = true
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard dragStart != nil else { return }
+        mouseDragged(with: event)
+        dragStart = nil
+
+        guard selectionRect.width >= 4, selectionRect.height >= 4 else {
+            selectionRect = selectionBeforeDrag
+            onSelectionChanged?(selectionRect)
+            needsDisplay = true
+            return
+        }
+
+        onSelectionCompleted?(selectionRect)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+
+        frozenImage.draw(
+            in: bounds,
+            from: NSRect(origin: .zero, size: frozenImage.size),
+            operation: .sourceOver,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
 
         let shade = NSBezierPath(rect: bounds)
         shade.appendRect(selectionRect)
@@ -505,7 +617,7 @@ private final class CaptureSelectionView: NSView {
     }
 
     private func drawInstructions() {
-        let text = "Return capture   Esc cancel   Arrows move   ⌥ fine   ⇧ resize   Space size"
+        let text = "Drag to capture   Esc cancel   Arrows move   ⇧ resize   Space size"
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12, weight: .medium),
             .foregroundColor: NSColor.white,
@@ -525,6 +637,13 @@ private final class CaptureSelectionView: NSView {
         text.draw(
             at: NSPoint(x: bubbleRect.minX + 12, y: bubbleRect.midY - textSize.height / 2),
             withAttributes: attributes
+        )
+    }
+
+    private func clampedPoint(_ point: NSPoint) -> NSPoint {
+        NSPoint(
+            x: min(max(point.x, bounds.minX), bounds.maxX),
+            y: min(max(point.y, bounds.minY), bounds.maxY)
         )
     }
 }
