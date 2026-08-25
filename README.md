@@ -49,12 +49,13 @@ swift build -c release --arch arm64 --arch x86_64
 ### Pointer-safe screenshots
 
 Press **Cmd+Shift+2** while the pointer is over a hover state, tooltip, menu, or other
-UI you want to preserve. GSD opens a non-activating selection overlay, so the pointer
-does not move and the app underneath keeps focus.
+UI you want to preserve. GSD freezes that display with the hover state and pointer baked
+in, then lets you select from the frozen frame without changing the captured result.
 
-- **Arrow keys** move the capture area; **Option+Arrow** moves it one point
+- **Drag with the mouse** to select and capture an area; the original pointer stays frozen
+- **Arrow keys** move the suggested area; **Option+Arrow** moves it one point
 - **Shift+Arrow** resizes the area; **Space** cycles common sizes
-- **Return** captures; **Escape** cancels
+- **Return** captures the suggested area; **Escape** cancels
 - In the preview, **Return** or **Cmd+C** copies the image; **Escape** discards it
 - Uncopied captures auto-discard after 20 seconds
 
